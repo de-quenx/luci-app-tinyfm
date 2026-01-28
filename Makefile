@@ -8,14 +8,43 @@
 # OpenWrt melalui antarmuka web yang mudah digunakan.
 include $(TOPDIR)/rules.mk
 
-LUCI_TITLE:=LuCI Filemanager
-LUCI_DEPENDS:=+php8 +php8-cgi +php8-fastcgi +php8-fpm +php8-mod-session +php8-mod-ctype +php8-mod-fileinfo +php8-mod-zip +php8-mod-iconv +php8-mod-mbstring +coreutils-stat +zoneinfo-asia +bash +curl +tar
-LUCI_DESCRIPTION:=Upload Download filemanager
+PKG_NAME:=luci-app-filemanager
+PKG_VERSION:=1.2.8
+PKG_RELEASE:=20250128
 
 PKG_MAINTAINER:=BobbyUnknown <bobbyun.knowm88gmail.com>
-PKG_VERSION:=1.0.1
 PKG_LICENSE:=Apache-2.0
 
-include $(TOPDIR)/feeds/luci/luci.mk
+PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)
 
-# call BuildPackage - OpenWrt buildroot signature
+include $(INCLUDE_DIR)/package.mk
+
+define Package/$(PKG_NAME)
+	CATEGORY:=LuCI
+	SUBMENU:=3. Applications
+	TITLE:=LuCI Filemanager
+	PKGARCH:=all
+	DEPENDS:=+luci-base +php8 +php8-cgi +php8-fastcgi +php8-fpm +php8-mod-session +php8-mod-ctype +php8-mod-fileinfo +php8-mod-zip +php8-mod-iconv +php8-mod-mbstring +coreutils-stat +bash +curl +tar
+endef
+
+define Package/$(PKG_NAME)/description
+	TinyFileManager for openwrt
+endef
+
+define Build/Prepare
+	$(CP) $(CURDIR)/root $(PKG_BUILD_DIR)
+	$(CP) $(CURDIR)/htdocs $(PKG_BUILD_DIR)
+	mkdir -p $(PKG_BUILD_DIR)/www/tinyfm
+endef
+
+define Build/Compile
+endef
+
+define Package/$(PKG_NAME)/install
+	$(CP) $(PKG_BUILD_DIR)/root/* $(1)/
+	mkdir -p $(1)/www/tinyfm
+	$(CP) $(PKG_BUILD_DIR)/htdocs/tinyfm/* $(1)/www/tinyfm/
+	ln -sf / $(1)/www/tinyfm/rootfs
+endef
+
+$(eval $(call BuildPackage,$(PKG_NAME)))
