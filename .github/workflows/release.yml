@@ -1,96 +1,130 @@
-name: Build IPK
+name: Build Packages
 
 on:
   push:
     branches:
-      - master
+      - main
     paths:
       - 'Makefile'
   workflow_dispatch:
 
 jobs:
-  build:
-    name: Build IPK
+  # 1. JOB PERSIAPAN: Mengekstrak versi dan membuat wadah Rilis
+  prepare-release:
+    name: Prepare Release
     runs-on: ubuntu-latest
-
+    outputs:
+      version: ${{ steps.info.outputs.version }}
+      pkg_name: ${{ steps.info.outputs.pkg_name }}
     steps:
       - name: 🔄 Checkout repository
         uses: actions/checkout@v4
 
-      - name: 🛠️ Set up build environment
+      - name: 🔖 Extract Version and Package Name
+        id: info
         run: |
-          echo -e "\033[34m🔨 Preparing build environment \033[0m"
-          sudo -E apt-get update > /dev/null 2>&1
-          sudo -E apt-get install build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3-setuptools rsync swig unzip zlib1g-dev file wget > /dev/null 2>&1
-          sudo -E apt-get autoremove --purge > /dev/null 2>&1
-          sudo -E apt-get clean > /dev/null 2>&1
-          
-          echo -e "\033[34m🔧 Configuring environment \033[0m"
           PKG_NAME=$(basename ${{ github.repository }})
-          PKG_VERSION=$(grep -oP 'PKG_VERSION:=\K.*' Makefile)
-          export TERM=xterm
-          echo "PKG_VERSION=$PKG_VERSION" >> $GITHUB_ENV
-          echo "PKG_NAME=$PKG_NAME" >> $GITHUB_ENV
-          echo -e "\033[34m\t📦 PKG_NAME:\033[37m $PKG_NAME \033[0m"
-          echo -e "\033[34m\t🔖 PKG_VERSION:\033[37m $PKG_VERSION \033[0m"
-          echo -e "\033[34m\t💻 TERM:\033[37m xterm \033[0m"
+          PKG_VERSION=$(grep -oP 'PKG_VERSION:=\K.*' Makefile | tr -d '[:space:]')
+          echo "pkg_name=$PKG_NAME" >> $GITHUB_OUTPUT
+          echo "version=$PKG_VERSION" >> $GITHUB_OUTPUT
 
-      - name: 📦 Set up resources
-        run: |
-          echo -e "\033[34m🗂️ Downloading SDK OpenWRT \033[0m"
-          curl -s -L https://downloads.openwrt.org/releases/23.05.5/targets/x86/64/openwrt-sdk-23.05.5-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz -o sdk.tar.xz
-          mkdir sdk && tar -xf sdk.tar.xz -C sdk --strip-components=1
-
-          echo -e "\033[34m📦 Cloning $PKG_NAME package \033[0m"
-          git clone -q https://github.com/${{ github.repository }} sdk/package/${PKG_NAME}
-          chmod +x sdk/package/${PKG_NAME}/root/usr/bin/tinyfm.sh
-
-      - name: 📡 Set up SDK feeds
-        run: |
-          echo -e "\033[34m🔍 Updating SDK feeds \033[0m"
-          cd sdk
-          ./scripts/feeds update -a > /dev/null 2>&1
-
-          echo -e "\033[34m🔗 Installing SDK feeds \033[0m"
-          ./scripts/feeds install -a > /dev/null 2>&1
-
-      - name: ⚙️ Configure & compile IPK
-        run: |
-          echo -e "\033[34m🔧 Configuring SDK \033[0m"
-          cd sdk && make defconfig > /dev/null 2>&1
-          rm -rf feeds/luci/contrib/package/csstidy
-          sed -i '/^CONFIG_LUCI_JSMIN=/d' .config
-          sed -i '/^CONFIG_LUCI_CSSTIDY=/d' .config
-
-          echo -e "\033[34m🔨 Compiling ${PKG_NAME} package \033[0m"
-          make package/${PKG_NAME}/{clean,compile} -j$(nproc) > /dev/null 2>&1
-
-          echo -e "\033[34m📦 Compilation completed: \033[0m"
-          PKG_PATH=$(find bin/packages/x86_64/luci/ -name 'luci-app-*.ipk')
-          PKG_FILE=$(basename $PKG_PATH)
-          echo "PKG_PATH=sdk/$PKG_PATH" >> $GITHUB_ENV
-          echo "PKG_FILE=$PKG_FILE" >> $GITHUB_ENV
-          echo -e "\033[34m\t📂 Package path:\033[37m $PKG_PATH \033[0m"
-          echo -e "\033[34m\t📄 Package file:\033[37m $PKG_FILE \033[0m"
-
-      - name: 🚀 Generate new tag & release
+      - name: 🚀 Create GitHub release
         uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          name: ${{ env.PKG_NAME }}
-          tag_name: ${{ env.PKG_VERSION }}
+          name: ${{ steps.info.outputs.pkg_name }} v${{ steps.info.outputs.version }}
+          tag_name: ${{ steps.info.outputs.version }}
           draft: false
           prerelease: false
-          files: ${{ env.PKG_PATH }}
           body: |
-            ### Changelog ${{ env.PKG_VERSION }}:
-
-            **📦 New build of ${{ env.PKG_NAME }}**
-
+            ### Changelog ${{ steps.info.outputs.version }}:
+            
+            **📦 New build of ${{ steps.info.outputs.pkg_name }}**
+            
+            - **Supported OpenWrt Versions**: 23.05 (IPK), 24.10 (IPK), 25.12 (APK)
+            - **Architecture**: x86_64
+            
             **🐞 Bug fixes and improvements**
-            
             **📸 Screenshot of application**
-
             **📝 Full Changelog**
-            
+
+  # 2. JOB KOMPILASI: Berjalan paralel untuk 23.05, 24.10, dan 25.12
+  build:
+    name: Build OpenWrt ${{ matrix.os_ver }}
+    needs: prepare-release
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            sdk_tag: 24.10.7
+            os_ver: "24.10"
+          - arch: x86_64
+            sdk_tag: 25.12.5
+            os_ver: "25.12"
+    steps:
+      - name: 🔄 Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 🛠️ Set up build environment
+        run: |
+          set -euo pipefail
+          PKG_NAME="${{ needs.prepare-release.outputs.pkg_name }}"
+          
+          # Setup struktur feed untuk SDK Action
+          mkdir -p "feeds/$PKG_NAME" artifacts
+          rsync -a --delete --exclude='.git/' --exclude='feeds/' --exclude='artifacts/' --exclude='release-artifacts/' ./ "feeds/$PKG_NAME/"
+          
+          # Mempertahankan skrip custom dari build.yml lama
+          chmod +x "feeds/$PKG_NAME/root/usr/bin/tinyfm.sh" || true
+          
+          # Menambahkan suffix versi OS pada Makefile agar paket tidak bentrok antar versi
+          OS_VERSION="${{ matrix.os_ver }}"
+          if [ "$OS_VERSION" != "25.12" ]; then
+            sed -i "s/^PKG_RELEASE:=.*/&_${OS_VERSION}/" "feeds/$PKG_NAME/Makefile"
+          fi
+
+      - name: 🔨 Build package using OpenWrt SDK
+        uses: openwrt/gh-action-sdk@main
+        env:
+          ARCH: ${{ matrix.arch }}-${{ matrix.sdk_tag }}
+          ARTIFACTS_DIR: ${{ github.workspace }}/artifacts
+          FEED_DIR: ${{ github.workspace }}/feeds
+          PACKAGES: ${{ needs.prepare-release.outputs.pkg_name }}
+          NO_REFRESH_CHECK: true
+          V: s
+          IGNORE_ERRORS: "m n"
+          
+      - name: 📦 Prepare release artifacts
+        run: |
+          set -euo pipefail
+          PKG_NAME="${{ needs.prepare-release.outputs.pkg_name }}"
+          mkdir -p "${{ github.workspace }}/release-artifacts"
+          
+          # Mendukung penemuan format .ipk dan .apk (25.12 menggunakan apk)
+          PACKAGE_FILES=$(find "${{ github.workspace }}/artifacts" -type f -name "${PKG_NAME}*.*pk" | sort)
+          
+          if [ -z "$PACKAGE_FILES" ]; then
+            echo "Error: No package file found!"
+            exit 1
+          fi
+          
+          for pkg in $PACKAGE_FILES; do
+            cp "$pkg" "${{ github.workspace }}/release-artifacts/"
+          done
+          ls -la "${{ github.workspace }}/release-artifacts/"
+
+      - name: 🚀 Upload release artifacts
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ needs.prepare-release.outputs.version }}
+          files: |
+            ${{ github.workspace }}/release-artifacts/*
+          overwrite_files: true
+          fail_on_unmatched_files: true
